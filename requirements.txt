@@ -1,9 +1,0 @@
-streamlit
-langchain
-langgraph
-openai
-faiss-cpu  # GPU 사용시 faiss-gpu
-pdfplumber
-python-dotenv
-tiktoken
-numpy
