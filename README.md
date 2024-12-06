@@ -6,7 +6,8 @@
 - API URL : http://localhost:5003/analyze_contract
 - parameter : file
               ( test file path : data/contract_test.pdf)
-- 응답값 예시 : 
+- 응답값 예시 :
+'''json
 {"metadata":
 	{"processed_at":"2024-12-05T23:06:37.010133","total_sentences":48,"vector_store":{"embedding_model":"text-embedding-3-large","id":"store_openai_text-embedding-3-large_20241204_001024","model_type":"openai"}
 ,"violation_count":15}
@@ -20,4 +21,4 @@
      }
 }
 ,"status":"success"}
-
+'''
