@@ -17,7 +17,7 @@
       "id": "store_openai_text-embedding-3-large_20241204_001024",
       "model_type": "openai"
     },
-    "violation_count": 15
+    "violation_count": 15   // 전체 검출위반 건수
   },
   "results": {
     "3": {
