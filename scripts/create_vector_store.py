@@ -7,7 +7,7 @@ from datetime import datetime
 #######
 # 스크립트 실행 방법
 # python scripts/create_vector_store.py --csv_path /path/to/your/data.csv
-# python scripts/create_vector_store.py --csv_path /path/to/your/data.csv --output_dir vector_stores --model_type huggingface --model_name BAAI/bge-m3
+# python scripts/create_vector_store.py --csv_path hackerton/data/poc.cs --output_dir vector_stores --model_type huggingface --model_name BAAI/bge-m3
 # python scripts/create_vector_store.py --csv_path hackerton/data/poc.csv --output_dir vector_stores --model_type openai --model_name text-embedding-3-large
 #
 # 생성된 벡터 저장소는 다음과 같은 구조로 저장
@@ -56,25 +56,46 @@ class VectorStoreCreator:
     def process(self):
         """CSV 파일을 처리하고 벡터 저장소 생성"""
         try:
-            # 1. CSV 파일 로드
-            logger.info(f"CSV 파일 로딩 시작: {self.csv_path}")
-            documents = self.document_processor.load_csv(self.csv_path)
-            logger.info(f"로드된 문서 수: {len(documents)}")
+            # 1. CSV 파일 존재 확인
+            if not os.path.exists(self.csv_path):
+                raise FileNotFoundError(f"CSV 파일을 찾을 수 없습니다: {self.csv_path}")
 
-            # 2. 벡터 저장소 초기화 및 문서 저장
+            # 2. CSV 파일 로드
+            logger.info(f"CSV 파일 로딩 시작: {self.csv_path}")
+            try:
+                documents = self.document_processor.load_csv(self.csv_path)
+                if not documents:
+                    raise ValueError(
+                        f"CSV 파일 '{self.csv_path}'에서 문서를 로드할 수 없습니다."
+                    )
+                logger.info(f"로드된 문서 수: {len(documents)}")
+
+                # 샘플 데이터 출력 (디버깅용)
+                if documents:
+                    logger.info("첫 번째 문서 샘플:")
+                    logger.info(f"Content: {documents[0].page_content[:200]}")
+                    logger.info(f"Metadata: {documents[0].metadata}")
+
+            except Exception as e:
+                logger.error(f"CSV 파일 로드 중 상세 오류: {str(e)}")
+                raise
+
+            # 3. 벡터 저장소 초기화 및 문서 임베딩
             logger.info(
-                f"{self.model_type} 모델({self.model_name})을 사용하여 벡터 저장소 초기화 및 문서 임베딩 시작"
+                f"{self.model_type} 모델 ({self.model_name})을 사용하여 벡터 저장소 초기화 및 문서 임베딩 시작"
             )
             self.vector_store.initialize_store(documents)
 
-            # 3. 벡터 저장소 저장
+            # 4. 벡터 저장소 저장
             store_path = os.path.join(self.output_dir, "faiss_store")
-            self.vector_store.save_local(
-                store_path, allow_dangerous_deserialization=True
-            )
-            logger.info(f"벡터 저장소 저장 완료: {store_path}")
+            try:
+                self.vector_store.save_local(store_path)
+                logger.info(f"벡터 저장소 저장 완료: {store_path}")
+            except Exception as e:
+                logger.error(f"벡터 저장소 저장 중 오류 발생: {str(e)}")
+                raise
 
-            # 4. 메타데이터 저장
+            # 5. 메타데이터 저장
             metadata = {
                 "document_count": len(documents),
                 "embedding_model": self.model_name,

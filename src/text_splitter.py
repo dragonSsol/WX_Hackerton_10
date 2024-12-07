@@ -3,6 +3,7 @@ from typing import List, Dict
 import kss
 import re
 import logging
+from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class KoreanSentenceSplitter(TextSplitter):
         """문서를 문장 단위로 분할하고 메타데이터를 포함하여 반환"""
         logger.debug(f"문서 분할 시작: {len(documents)}개 문서")
         result = []
-        sentence_number = 1
+        section_number = 1
 
         for doc in documents:
             try:
@@ -34,11 +35,11 @@ class KoreanSentenceSplitter(TextSplitter):
                             {
                                 "content": sentence.strip(),
                                 "page_number": page_number + 1,
-                                "sentence_number": sentence_number,
+                                "section_number": section_number,
                                 "metadata": doc.metadata,
                             }
                         )
-                        sentence_number += 1
+                        section_number += 1
             except Exception as e:
                 logger.error(f"문서 분할 중 오류 발생: {str(e)}")
                 continue
@@ -106,3 +107,34 @@ class KoreanSentenceSplitter(TextSplitter):
             if text.strip():
                 return [text.strip()]
             return []
+
+    def split_by_numbering(self, documents: List[Document]) -> List[Document]:
+        """문서를 번호 매기기 방식으로 분할"""
+        split_docs = []
+        for doc in documents:
+            content = doc.page_content
+            # 번호 매기기 패턴으로 분할
+            sections = re.split(r'(\d+[\)）\.])\s*', content)
+            
+            current_number = 0
+            for i in range(1, len(sections), 2):
+                if i+1 < len(sections):
+                    number_part = sections[i].strip('.)）')
+                    text_part = sections[i+1].strip()
+                    
+                    if text_part:  # 빈 텍스트가 아닌 경우만 처리
+                        current_number += 1
+                        # 메타데이터에 section_number와 page_number추가
+                        metadata = {
+                            "section_number": current_number,
+                            "page_number": doc.metadata.get("page", 1),
+                            "source": doc.metadata.get("source", ""),
+                        }
+                        
+                        split_docs.append(Document(
+                            page_content=text_part,
+                            metadata=metadata
+                        ))
+        
+        logger.info(f"문서 분할 완료: {len(split_docs)}개 섹션 생성")
+        return split_docs

@@ -9,6 +9,8 @@ from langchain_teddynote import logging as langsmith_logging
 from openai import OpenAI
 from langsmith.wrappers import wrap_openai
 import json
+from dotenv import load_dotenv
+import os
 
 
 logger = logging.getLogger(__name__)
@@ -23,11 +25,18 @@ class RAGChain:
         # LangSmith 설정
         langsmith_logging.langsmith("hackerton")
 
+        # 환경 변수 로드
+        load_dotenv()
+        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        openrouter_api_base = os.getenv("OPENROUTER_API_BASE")
+        if not openrouter_api_key:
+            raise ValueError("OPENROUTER_API_KEY가 환경 변수에 설정되지 않았습니다.")
+
         # OpenRouter 클라이언트 설정
         self.client = wrap_openai(
             OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key="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",
+                base_url=openrouter_api_base,
+                api_key=openrouter_api_key,
             )
         )
 
@@ -78,11 +87,48 @@ class RAGChain:
             logger.error(f"OpenRouter API error: {str(e)}")
             return {"error": f"Error occurred: {str(e)}"}
 
+    def normalize_text(self, text: str) -> str:
+        """GPT-4o mini를 사용하여 텍스트 정규화"""
+        try:
+            prompt = """당신은 한국어 문장 교정 전문가입니다. 
+                        주어진 문장을 읽기 쉽도록 적절한 띄어쓰기와 문장 부호를 교정해주세요.
+                        원래 문장의 의미는 그대로 유지하면서 띄어쓰기만 교정하여 한 문장으로 출력해주세요.
+                        다른 설명은 하지 말고 교정된 문장만 출력해주세요.
+
+                        입력 문장: {text}"""
+
+            response = self.client.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": prompt.format(text=text)}],
+                extra_headers={"X-Title": "hackerton"},
+                temperature=0,
+                timeout=30,
+                max_tokens=200,
+            )
+
+            normalized_text = response.choices[0].message.content.strip()
+            logger.info(f"원본 문장: {text}")
+            logger.info(f"정규화된 문장: {normalized_text}")
+
+            return normalized_text
+
+        except Exception as e:
+            logger.error(f"텍스트 정규화 중 오류: {str(e)}")
+            return text  # 오류 발생 시 원본 텍스트 반환
+
     def run_rag_chain(self, question: str, retriever) -> str:
         """RAG 체인 실행"""
         try:
             context = self.format_docs(retriever.invoke(question))
             prompt_value = self.prompt.format(context=context, question=question)
+            # 질문 텍스트 정규화
+            #normalized_question = self.normalize_text(question)
+
+            # 정규화된 텍스트로 검색 수행
+            #context = self.format_docs(retriever.invoke(normalized_question))
+            #prompt_value = self.prompt.format(
+             #   context=context, question=normalized_question
+            #)
 
             return self.get_openrouter_response(prompt_value)
         except Exception as e:

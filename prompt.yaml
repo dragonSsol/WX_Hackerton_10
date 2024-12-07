@@ -19,7 +19,7 @@ template: |
   - Provide the answer in JSON format.
   - Remove the json markdown block.
   - Example:  
-  {{'원문': 사용자 question, '위반여부': Y/N, '위반사유': 위반문장일때 위반인 이유, '대안 제시': 위반문장일때 올바른 문장으로 수정 }}
+  {{'asis_sentence': 사용자 question, 'detection_flag': 'Y/N', 'comments': 위반문장일때 위반인 이유, 'tobe_sentence': 위반문장일때 올바른 문장으로 수정 }}
 
   **Source**  
   - (The source must be a file name (with page number) or URL provided in the context. Omit if the source cannot be found.)  

@@ -53,39 +53,66 @@ class ContractAnalyzer:
         logger.info("계약서 분석기 초기화 완료")
 
     def load_vector_stores(self, vector_stores_path: str):
-        """여러 벡터 스토어 로드"""
+        """가장 최근 벡터 스토어만 로드"""
         try:
-            for store_dir in Path(vector_stores_path).iterdir():
-                if store_dir.is_dir() and store_dir.name.startswith("store_"):
-                    # 메타데이터 로드
-                    metadata_path = store_dir / "metadata.json"
-                    if not metadata_path.exists():
+            logger.info(f"벡터 스토어 로드 시작: {vector_stores_path}")
+
+            # store_ 로 시작하는 모든 디렉토리 찾기
+            store_dirs = []
+            for d in Path(vector_stores_path).iterdir():
+                if d.is_dir() and d.name.startswith("store_"):
+                    try:
+                        # store_modeltype_modelname_YYYYMMDD_HHMMSS 형식 파싱
+                        timestamp_str = (
+                            d.name.split("_")[-2] + "_" + d.name.split("_")[-1]
+                        )
+                        timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                        store_dirs.append((d, timestamp))
+                    except (IndexError, ValueError):
+                        logger.warning(f"잘못된 방식의 벡터 스토어 디렉토리: {d.name}")
                         continue
 
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
+            if not store_dirs:
+                raise ValueError(
+                    f"사용 가능한 벡터 스토어가 없습니다: {vector_stores_path}"
+                )
 
-                    # 임베더 및 벡터 스토어 초기화
-                    embedder = Embedder(
-                        model_type=metadata["model_type"],
-                        model_name=metadata["embedding_model"],
-                    )
-                    vector_store = VectorStore(embedder.embeddings)
+            # 타임스탬프 기준으로 정렬하고 가장 최근 것만 선택
+            latest_store_dir, latest_timestamp = max(store_dirs, key=lambda x: x[1])
 
-                    # 벡터 스토어 로드
-                    store_path = store_dir / "faiss_store"
-                    if store_path.exists():
-                        vector_store.load_local(str(store_path))
-                        self.vector_stores[store_dir.name] = {
-                            "store": vector_store,
-                            "metadata": metadata,
-                            "retriever": vector_store.get_retriever(
-                                search_kwargs={
-                                    "k": DEFAULT_CONFIG.get("RETRIEVER_K", 4)
-                                }
-                            ),
-                        }
-                        logger.info(f"벡터 스토어 로드 완료: {store_dir.name}")
+            # 메타데이터 로드
+            metadata_path = latest_store_dir / "metadata.json"
+            if not metadata_path.exists():
+                raise ValueError(f"메타데이터 파일이 없습니다: {metadata_path}")
+
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+
+            # 임베더 및 벡터 스토어 초기화
+            embedder = Embedder(
+                model_type=metadata["model_type"],
+                model_name=metadata["embedding_model"],
+            )
+            vector_store = VectorStore(embedder.embeddings)
+
+            # 벡터 스토어 로드
+            store_path = latest_store_dir / "faiss_store"
+            if not store_path.exists():
+                raise ValueError(f"벡터 스토어 파일이 없습니다: {store_path}")
+
+            vector_store.load_local(str(store_path))
+            self.vector_stores[latest_store_dir.name] = {
+                "store": vector_store,
+                "metadata": metadata,
+                "retriever": vector_store.get_retriever(
+                    search_kwargs={"k": DEFAULT_CONFIG.get("RETRIEVER_K", 4)}
+                ),
+                "created_at": latest_timestamp.isoformat(),
+            }
+
+            logger.info(
+                f"가장 최근 벡터 스토어 로드 완료: {latest_store_dir.name} (생성일시: {latest_timestamp})"
+            )
 
         except Exception as e:
             logger.error(f"벡터 스토어 로드 중 오류: {str(e)}")
@@ -103,14 +130,38 @@ class ContractAnalyzer:
         try:
             # 벡터 스토어 선택
             if not vector_store_id:
-                # 가장 최근 벡터 스토어 선택
-                vector_store_id = sorted(self.vector_stores.keys())[-1]
+                # 생성 시간 기준으로 가장 최근 벡터 스토어 선택
+                try:
+                    vector_store_id = max(
+                        self.vector_stores.keys(),
+                        key=lambda k: datetime.fromisoformat(
+                            self.vector_stores[k]["created_at"]
+                        ),
+                    )
+                    logger.info(f"가장 최근 벡터 스토어 선택: {vector_store_id}")
+                    logger.info(
+                        f"생성 시간: {self.vector_stores[vector_store_id]['created_at']}"
+                    )
+                except ValueError as e:
+                    logger.error(f"벡터 스토어 선택 중 오류: {str(e)}")
+                    raise ValueError("사용 가능한 벡터 스토어가 없습니다.")
+            else:
+                logger.info(f"지정된 벡터 스토어 사용: {vector_store_id}")
 
             if vector_store_id not in self.vector_stores:
-                raise ValueError(f"벡터 스토어를 찾을 수 없습니다: {vector_store_id}")
+                available_stores = list(self.vector_stores.keys())
+                raise ValueError(
+                    f"벡터 스토어를 찾을 수 없습니다: {vector_store_id}\n"
+                    f"사용 가능한 벡터 스토어: {available_stores}"
+                )
 
             selected_store = self.vector_stores[vector_store_id]
             retriever = selected_store["retriever"]
+
+            logger.info(f"선택된 벡터 스토어 정보:")
+            logger.info(f"- ID: {vector_store_id}")
+            logger.info(f"- 모델: {selected_store['metadata']['embedding_model']}")
+            logger.info(f"- 생성일시: {selected_store['created_at']}")
 
             # PDF를 임시 파일로 저장
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
@@ -124,8 +175,11 @@ class ContractAnalyzer:
             os.unlink(tmp_file.name)
 
             # 2. 문장 분할
-            logger.info("문서 문장 분할 시작")
-            split_docs = self.text_splitter.split_documents(docs)
+            # logger.info("문서 문장 분할 시작")
+            # split_docs = self.text_splitter.split_documents(docs)
+
+            logger.info("문서 넘버링으로 분할 시작")
+            split_docs = self.text_splitter.split_by_numbering(docs)
 
             # 문장 내의 불필요한 따옴표 제거
             for doc in split_docs:
@@ -133,79 +187,58 @@ class ContractAnalyzer:
 
             logger.info(f"분할된 문장 수: {len(split_docs)}")
 
-            # 3. 각 문장 분석
+            # 문서 분석 실행
             analysis_results = {}
             for doc in split_docs:
                 try:
-                    # RAG 체인으로 문장 분석
-                    analysis = self.rag_chain.analyze_documents(
-                        query=doc["content"], retriever=retriever
-                    )
-
-                    # 분석 결과에서 위반여부 확인
-                    if isinstance(analysis, dict):
-                        logger.info(f"########분석 결과: {analysis}")
-                        if analysis.get("status") == "success" and isinstance(
-                            analysis.get("response"), dict
-                        ):
-                            logger.info(f"########응답: {analysis['response']}")
-                            response_data = analysis["response"]
-                            logger.info(
-                                f"########응답 데이터1: {response_data['위반여부']}"
-                            )
-                            logger.info(
-                                f"########응답 데이터2: {response_data.get('위반여부')}"
-                            )
-
-                            # 위반여부 확인
-                            violation_status = response_data.get("위반여부")
-                            if violation_status == "Y":
-                                # 위반여부가 Y인 경우에만 결과 저장
-                                analysis_results[doc["sentence_number"]] = {
-                                    "sentence_number": doc["sentence_number"],
-                                    "page_number": doc["page_number"],
-                                    "content": doc["content"],
-                                    "analysis": response_data,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-
-                                logger.info(
-                                    f"위반사항 발견: 문장 {doc['sentence_number']}"
-                                )
-                        else:
-                            logger.error(
-                                f"분석 오류: {analysis.get('error', '알 수 없는 오류')}"
-                            )
+                    # 문서 분석 실행
+                    result = self.rag_chain.analyze_documents(doc.page_content, retriever)
+                    logger.info(f"########분석 결과: {result}")
+                    
+                    # response 데이터 추출
+                    response_data = result.get('response', {})
+                    logger.info(f"########응답: {response_data}")
+                    
+                    # 위반 여부 확인
+                    violation_status = response_data.get('detection_flag','N')
+                    logger.info(f"########응답 데이터1: {violation_status}")
+                    
+                    if violation_status == "Y":
+                        try:
+                            # 위반여부가 Y인 경우에만 결과 저장
+                            result_data = {
+                                "section_number": result.get('section_number'),  #분석 결과에서 section_number 가져오기
+                                "page_number": doc.metadata.get("page_number",1),
+                                "content": doc.page_content,
+                                "analysis": response_data,
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                            
+                            # section_number가 있는 경우에만 저장
+                            if result_data["section_number"] is not None:
+                                analysis_results[result_data["section_number"]] = result_data
+                                logger.info(f"위반사항 발견: 섹션 {result_data['section_number']}")
+                            else:
+                                logger.warning("섹션 번호가 없는위반사항 발견")
+                                
+                        except Exception as e:
+                            logger.error(f"결과 저장 중 오류: {str(e)}")
+                            logger.error(f"문서 데이터: {doc.metadata}")
+                            continue
 
                 except Exception as e:
-                    error_message = str(e)
-                    if "Insufficient credits" in error_message:
-                        error_message = "크레딧이 부족합니다. https://openrouter.ai/credits 에서 크레딧을 추가하세요."
-                    logger.error(
-                        f"문장 {doc['sentence_number']} 분석 중 오류: {error_message}"
-                    )
+                    logger.error(f"문서 분석 중 오류:{str(e)}")
                     continue
 
             return {
-                "status": "success",
-                "results": analysis_results,
-                "metadata": {
-                    "total_sentences": len(split_docs),
-                    "violation_count": len(analysis_results),
-                    "processed_at": datetime.now().isoformat(),
-                    "vector_store": {
-                        "id": vector_store_id,
-                        "model_type": selected_store["metadata"]["model_type"],
-                        "embedding_model": selected_store["metadata"][
-                            "embedding_model"
-                        ],
-                    },
-                },
+                "total_sections": len(split_docs),
+                "violation_count": len(analysis_results),
+                "violations": analysis_results
             }
 
         except Exception as e:
             logger.error(f"계약서 분석 중 오류 발생: {str(e)}")
-            return {"status": "error", "error": str(e)}
+            raise
 
 
 # 글로벌 분석기 인스턴스
@@ -269,10 +302,10 @@ def analyze_contract():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/get_cached_result/<int:sentence_number>", methods=["GET"])
-def get_cached_result(sentence_number: int):
+@app.route("/get_cached_result/<int:section_number>", methods=["GET"])
+def get_cached_result(section_number: int):
     """캐시된 분석 결과 조회"""
-    result = analyzer.cache_manager.get_result(sentence_number)
+    result = analyzer.cache_manager.get_result(section_number)
     if result:
         return jsonify(result)
     return jsonify({"error": "결과를 찾을 수 없습니다"}), 404
